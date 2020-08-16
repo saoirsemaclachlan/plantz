@@ -1,7 +1,11 @@
+import 'dart:io';
+
+import "package:collection/collection.dart";
 import 'package:flutter/material.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:intl/intl.dart';
+import 'package:image_picker/image_picker.dart';
 
 void main() {
   runApp(Plantz());
@@ -14,7 +18,9 @@ void createTables(Database db) {
   db.execute(
     "CREATE TABLE IF NOT EXISTS actions(id INTEGER PRIMARY KEY AUTOINCREMENT, plant_id INTEGER, action TEXT, timestamp INTEGER, FOREIGN KEY(plant_id) REFERENCES plants(id))",
   );
-  db.execute("ALTER TABLE plants ADD COLUMN frequency INTEGER");
+  db.execute(
+    "CREATE TABLE IF NOT EXISTS photos(id INTEGER PRIMARY KEY AUTOINCREMENT, plant_id INTEGER, path TEXT, timestamp INTEGER, FOREIGN KEY(plant_id) REFERENCES plants(id))",
+  );
 }
 
 Future<Database> getDatabase() async {
@@ -26,7 +32,7 @@ Future<Database> getDatabase() async {
     onDowngrade: (db, oldversion, newVersion) {
       createTables(db);
     },
-    version: 5,
+    version: 1,
   );
 }
 
@@ -77,6 +83,21 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
   Plant plant;
   List<int> waterings = [];
   TextEditingController frequencyController;
+  final picker = ImagePicker();
+
+  Future getImage() async {
+    final pickedFile = await picker.getImage(source: ImageSource.camera);
+    int ts = getCurrentTimestamp();
+    await db.insert(
+      'photos',
+      {'plant_id': plant.id, 'path': pickedFile.path, 'timestamp': ts},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+
+    setState(() {
+      plant.imagePath = pickedFile.path;
+    });
+  }
 
   Future<List<int>> loadPlant() async {
     db = await getDatabase();
@@ -146,7 +167,16 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
           updateFrequency(int.tryParse(frequencyController.text) ?? 0);
         },
       ),
+      FlatButton(
+        child: Text('Add Image'),
+        onPressed: () {
+          getImage();
+        },
+      )
     ];
+    if (plant.imagePath != null) {
+      widgets.add(Image.file(File(plant.imagePath)));
+    }
     widgets.addAll(waterings
         .map((timestamp) => Card(
               child: ListTile(
@@ -185,8 +215,9 @@ class Plant {
   final int id;
   int frequency;
   int ts;
+  String imagePath;
 
-  Plant(this.name, this.id, this.frequency, this.ts);
+  Plant(this.name, this.id, this.frequency, this.ts, this.imagePath);
 }
 
 class _MainPageState extends State<MainPage> {
@@ -205,7 +236,7 @@ class _MainPageState extends State<MainPage> {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     setState(() {
-      plants.add(Plant(plant, id, frequency, 0));
+      plants.add(Plant(plant, id, frequency, 0, null));
       sortPlantList(plants);
     });
   }
@@ -237,10 +268,20 @@ class _MainPageState extends State<MainPage> {
     db = await getDatabase();
     final List<Map<String, dynamic>> maps = await db.rawQuery(
         "SELECT plants.id as id, name, frequency, action, max(timestamp) as ts from plants left outer join actions on plants.id = plant_id group by plants.id, name, frequency, action");
+    final List<Map<String, dynamic>> photos =
+        await db.rawQuery("SELECT * from photos");
+    var groupedPhotos = groupBy(photos, (photo) => photo['plant_id']);
     var ret = List.generate(
         maps.length,
-        (i) => Plant(maps[i]['name'], maps[i]['id'], maps[i]['frequency'] ?? 0,
-            maps[i]['ts'] ?? 0));
+        (i) => Plant(
+            maps[i]['name'],
+            maps[i]['id'],
+            maps[i]['frequency'] ?? 0,
+            maps[i]['ts'] ?? 0,
+            groupedPhotos.containsKey(maps[i]['id']) ? groupedPhotos[maps[i]['id']].reduce((value, element) =>
+                value['timestamp'] > element['timestamp']
+                    ? value
+                    : element)['path'] : null));
     sortPlantList(ret);
     return ret;
   }
@@ -280,7 +321,8 @@ class _MainPageState extends State<MainPage> {
                         child: Material(
                             color: needsWatering(p) ? Colors.red : null,
                             child: ListTile(
-                                leading: FlutterLogo(),
+                                contentPadding: p.imagePath != null ? EdgeInsets.only(left: 0.0, right: 16.0) : null,
+                                leading: p.imagePath != null ? Image.file(File(p.imagePath), fit: BoxFit.fitHeight) : FlutterLogo(),
                                 title: Text(p.name),
                                 trailing: Row(
                                     mainAxisSize: MainAxisSize.min,
@@ -289,7 +331,8 @@ class _MainPageState extends State<MainPage> {
                                           child: Icon(Icons.bubble_chart),
                                           onPressed: () {
                                             var ts = getCurrentTimestamp();
-                                            db.insert(
+                                            db
+                                                .insert(
                                               'actions',
                                               {
                                                 'plant_id': p.id,
@@ -298,7 +341,8 @@ class _MainPageState extends State<MainPage> {
                                               },
                                               conflictAlgorithm:
                                                   ConflictAlgorithm.replace,
-                                            ).then((e) {
+                                            )
+                                                .then((e) {
                                               setState(() {
                                                 p.ts = ts;
                                                 sortPlantList(plants);
