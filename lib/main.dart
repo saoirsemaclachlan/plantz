@@ -15,7 +15,6 @@ void createTables(Database db) {
     "CREATE TABLE IF NOT EXISTS actions(id INTEGER PRIMARY KEY AUTOINCREMENT, plant_id INTEGER, action TEXT, timestamp INTEGER, FOREIGN KEY(plant_id) REFERENCES plants(id))",
   );
   db.execute("ALTER TABLE plants ADD COLUMN frequency INTEGER");
-  print('yoooo');
 }
 
 Future<Database> getDatabase() async {
@@ -83,7 +82,8 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
     db = await getDatabase();
     var results = await db.query('actions',
         where: "plant_id = ? and action = 'water'", whereArgs: [plant.id]);
-    var ret = List.generate(results.length, (i) => results[i]['timestamp'] as int);
+    var ret =
+        List.generate(results.length, (i) => results[i]['timestamp'] as int);
     ret.sort((t1, t2) => t2 - t1);
     return ret;
   }
@@ -184,7 +184,7 @@ class Plant {
   String name;
   final int id;
   int frequency;
-  final int ts;
+  int ts;
 
   Plant(this.name, this.id, this.frequency, this.ts);
 }
@@ -237,8 +237,6 @@ class _MainPageState extends State<MainPage> {
     db = await getDatabase();
     final List<Map<String, dynamic>> maps = await db.rawQuery(
         "SELECT plants.id as id, name, frequency, action, max(timestamp) as ts from plants left outer join actions on plants.id = plant_id group by plants.id, name, frequency, action");
-    print('heeee');
-    print(maps);
     var ret = List.generate(
         maps.length,
         (i) => Plant(maps[i]['name'], maps[i]['id'], maps[i]['frequency'] ?? 0,
@@ -284,27 +282,51 @@ class _MainPageState extends State<MainPage> {
                             child: ListTile(
                                 leading: FlutterLogo(),
                                 title: Text(p.name),
-                                trailing: PopupMenuButton<String>(
-                                  onSelected: (String value) {
-                                    setState(() {});
-                                  },
-                                  child: Icon(Icons.more_vert),
-                                  itemBuilder: (BuildContext context) =>
-                                      <PopupMenuEntry<String>>[
-                                    const PopupMenuItem<String>(
-                                      value: 'water',
-                                      child: Text('Water'),
-                                    ),
-                                    const PopupMenuItem<String>(
-                                      value: 'fertilize',
-                                      child: Text('Fertilize'),
-                                    ),
-                                    const PopupMenuItem<String>(
-                                      value: 'snooze',
-                                      child: Text('Snooze 1 day'),
-                                    ),
-                                  ],
-                                ),
+                                trailing: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      FlatButton(
+                                          child: Icon(Icons.bubble_chart),
+                                          onPressed: () {
+                                            var ts = getCurrentTimestamp();
+                                            db.insert(
+                                              'actions',
+                                              {
+                                                'plant_id': p.id,
+                                                'action': 'water',
+                                                'timestamp': ts
+                                              },
+                                              conflictAlgorithm:
+                                                  ConflictAlgorithm.replace,
+                                            ).then((e) {
+                                              setState(() {
+                                                p.ts = ts;
+                                                sortPlantList(plants);
+                                              });
+                                            });
+                                          }),
+                                      PopupMenuButton<String>(
+                                        onSelected: (String value) {
+                                          setState(() {});
+                                        },
+                                        child: Icon(Icons.more_vert),
+                                        itemBuilder: (BuildContext context) =>
+                                            <PopupMenuEntry<String>>[
+                                          const PopupMenuItem<String>(
+                                            value: 'water',
+                                            child: Text('Water'),
+                                          ),
+                                          const PopupMenuItem<String>(
+                                            value: 'fertilize',
+                                            child: Text('Fertilize'),
+                                          ),
+                                          const PopupMenuItem<String>(
+                                            value: 'snooze',
+                                            child: Text('Snooze 1 day'),
+                                          ),
+                                        ],
+                                      )
+                                    ]),
                                 onTap: () {
                                   Navigator.pushNamed(context, '/detail',
                                           arguments: p)
@@ -312,7 +334,6 @@ class _MainPageState extends State<MainPage> {
                                     loadPlants().then((result) {
                                       setState(() {
                                         plants = result;
-                                        print(plants);
                                       });
                                     });
                                   });
@@ -346,7 +367,8 @@ class _MainPageState extends State<MainPage> {
                     new FlatButton(
                       child: new Text("Add"),
                       onPressed: () {
-                        addPlant(addController.text, int.tryParse(frequencyController.text) ?? 7);
+                        addPlant(addController.text,
+                            int.tryParse(frequencyController.text) ?? 7);
                         Navigator.pop(context);
                       },
                     ),
