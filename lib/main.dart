@@ -131,7 +131,7 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     setState(() {
-      waterings.add(ts);
+      waterings.insert(0, ts);
     });
   }
 
@@ -155,7 +155,7 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
         decoration: new InputDecoration(labelText: "Name"),
         controller: controller,
         keyboardType: TextInputType.text,
-        onEditingComplete: () {
+        onChanged: (s) {
           updateName(controller.text);
         },
       ),
@@ -163,7 +163,7 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
         decoration: new InputDecoration(labelText: "Frequency"),
         controller: frequencyController,
         keyboardType: TextInputType.number,
-        onEditingComplete: () {
+        onChanged: (s) {
           updateFrequency(int.tryParse(frequencyController.text) ?? 0);
         },
       ),
@@ -278,10 +278,12 @@ class _MainPageState extends State<MainPage> {
             maps[i]['id'],
             maps[i]['frequency'] ?? 0,
             maps[i]['ts'] ?? 0,
-            groupedPhotos.containsKey(maps[i]['id']) ? groupedPhotos[maps[i]['id']].reduce((value, element) =>
-                value['timestamp'] > element['timestamp']
-                    ? value
-                    : element)['path'] : null));
+            groupedPhotos.containsKey(maps[i]['id'])
+                ? groupedPhotos[maps[i]['id']].reduce((value, element) =>
+                    value['timestamp'] > element['timestamp']
+                        ? value
+                        : element)['path']
+                : null));
     sortPlantList(ret);
     return ret;
   }
@@ -321,8 +323,13 @@ class _MainPageState extends State<MainPage> {
                         child: Material(
                             color: needsWatering(p) ? Colors.red : null,
                             child: ListTile(
-                                contentPadding: p.imagePath != null ? EdgeInsets.only(left: 0.0, right: 16.0) : null,
-                                leading: p.imagePath != null ? Image.file(File(p.imagePath), fit: BoxFit.fitHeight) : FlutterLogo(),
+                                contentPadding: p.imagePath != null
+                                    ? EdgeInsets.only(left: 0.0, right: 16.0)
+                                    : null,
+                                leading: p.imagePath != null
+                                    ? Image.file(File(p.imagePath),
+                                        fit: BoxFit.fitHeight)
+                                    : FlutterLogo(),
                                 title: Text(p.name),
                                 trailing: Row(
                                     mainAxisSize: MainAxisSize.min,
