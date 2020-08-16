@@ -31,6 +31,10 @@ Future<Database> getDatabase() async {
   );
 }
 
+int getCurrentTimestamp() {
+  return (DateTime.now().millisecondsSinceEpoch / 1000).round();
+}
+
 class Plantz extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -99,7 +103,7 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
   }
 
   Future<void> water() async {
-    int ts = (DateTime.now().millisecondsSinceEpoch / 1000).round();
+    int ts = getCurrentTimestamp();
     await db.insert(
       'actions',
       {'plant_id': plant.id, 'action': 'water', 'timestamp': ts},
@@ -125,7 +129,7 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    List<Widget> bla = [
+    List<Widget> widgets = [
       TextField(
         decoration: new InputDecoration(labelText: "Name"),
         controller: controller,
@@ -143,7 +147,7 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
         },
       ),
     ];
-    bla.addAll(waterings
+    widgets.addAll(waterings
         .map((timestamp) => Card(
               child: ListTile(
                 title: Text(DateFormat('d MMM y – kk:mm:ss').format(
@@ -155,7 +159,7 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
       appBar: AppBar(
         title: Text(plant.name),
       ),
-      body: Center(child: ListView(children: bla)),
+      body: Center(child: ListView(children: widgets)),
       floatingActionButton: FloatingActionButton(
         onPressed: () {
           water();
@@ -202,21 +206,31 @@ class _MainPageState extends State<MainPage> {
     );
     setState(() {
       plants.add(Plant(plant, id, frequency, 0));
-      plants.sort(plantSort);
+      sortPlantList(plants);
     });
   }
 
-  int plantSort(Plant p1, Plant p2) {
-    if (p1.frequency == 0 && p2.frequency == 0) {
-      return 0;
-    }
+  int plantSort(Plant p1, Plant p2, int now) {
+    var p1time = p1.ts + p1.frequency * 86400;
+    var p2time = p2.ts + p2.frequency * 86400;
     if (p1.frequency == 0) {
-      return 1;
+      p1time = now + 1;
     }
     if (p2.frequency == 0) {
+      p2time = now + 1;
+    }
+    if ((p1time <= now && p2time <= now) || (p1time > now && p2time > now)) {
+      return p1.name.compareTo(p2.name);
+    }
+    if (p1time <= now) {
       return -1;
     }
-    return p1.ts + p1.frequency * 86400 - p2.ts - p2.frequency * 86400;
+    return 1;
+  }
+
+  void sortPlantList(List<Plant> list) {
+    var now = getCurrentTimestamp();
+    list.sort((Plant a, Plant b) => plantSort(a, b, now));
   }
 
   Future<List<Plant>> loadPlants() async {
@@ -229,7 +243,7 @@ class _MainPageState extends State<MainPage> {
         maps.length,
         (i) => Plant(maps[i]['name'], maps[i]['id'], maps[i]['frequency'] ?? 0,
             maps[i]['ts'] ?? 0));
-    ret.sort(plantSort);
+    sortPlantList(ret);
     return ret;
   }
 
@@ -250,7 +264,7 @@ class _MainPageState extends State<MainPage> {
     if (p.frequency == 0) {
       return false;
     }
-    var now = (DateTime.now().millisecondsSinceEpoch / 1000).round();
+    var now = getCurrentTimestamp();
     return (now - p.ts - p.frequency * 86400) > 0;
   }
 
