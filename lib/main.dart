@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 
 import "package:collection/collection.dart";
 import 'package:flutter/material.dart';
@@ -13,7 +14,7 @@ void main() {
 
 void createTables(Database db) {
   db.execute(
-    "CREATE TABLE IF NOT EXISTS plants(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, frequency INTEGER)",
+    "CREATE TABLE IF NOT EXISTS plants(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, frequency INTEGER, snooze INTEGER)",
   );
   db.execute(
     "CREATE TABLE IF NOT EXISTS actions(id INTEGER PRIMARY KEY AUTOINCREMENT, plant_id INTEGER, action TEXT, timestamp INTEGER, FOREIGN KEY(plant_id) REFERENCES plants(id))",
@@ -21,6 +22,7 @@ void createTables(Database db) {
   db.execute(
     "CREATE TABLE IF NOT EXISTS photos(id INTEGER PRIMARY KEY AUTOINCREMENT, plant_id INTEGER, path TEXT, timestamp INTEGER, FOREIGN KEY(plant_id) REFERENCES plants(id))",
   );
+  db.execute("ALTER TABLE plants ADD COLUMN snooze INTEGER");
 }
 
 Future<Database> getDatabase() async {
@@ -32,7 +34,7 @@ Future<Database> getDatabase() async {
     onDowngrade: (db, oldversion, newVersion) {
       createTables(db);
     },
-    version: 1,
+    version: 6,
   );
 }
 
@@ -95,7 +97,7 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
     );
 
     setState(() {
-      plant.imagePath = pickedFile.path;
+      plant.imagePaths.insert(0, pickedFile.path);
     });
   }
 
@@ -130,8 +132,11 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
       {'plant_id': plant.id, 'action': 'water', 'timestamp': ts},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    await db.update('plants', {'snooze': 0},
+        where: "id = ?", whereArgs: [plant.id]);
     setState(() {
       waterings.insert(0, ts);
+      plant.snooze = 0;
     });
   }
 
@@ -174,9 +179,7 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
         },
       )
     ];
-    if (plant.imagePath != null) {
-      widgets.add(Image.file(File(plant.imagePath)));
-    }
+    widgets.addAll(plant.imagePaths.map((p) => Image.file(File(p))));
     widgets.addAll(waterings
         .map((timestamp) => Card(
               child: ListTile(
@@ -215,9 +218,10 @@ class Plant {
   final int id;
   int frequency;
   int ts;
-  String imagePath;
+  List<String> imagePaths;
+  int snooze;
 
-  Plant(this.name, this.id, this.frequency, this.ts, this.imagePath);
+  Plant(this.name, this.id, this.frequency, this.ts, this.imagePaths, this.snooze);
 }
 
 class _MainPageState extends State<MainPage> {
@@ -236,7 +240,7 @@ class _MainPageState extends State<MainPage> {
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     setState(() {
-      plants.add(Plant(plant, id, frequency, 0, null));
+      plants.add(Plant(plant, id, frequency, 0, [], 0));
       sortPlantList(plants);
     });
   }
@@ -250,8 +254,10 @@ class _MainPageState extends State<MainPage> {
     if (p2.frequency == 0) {
       p2time = now + 1;
     }
+    p1time = max(p1time, p1.snooze);
+    p2time = max(p2time, p2.snooze);
     if ((p1time <= now && p2time <= now) || (p1time > now && p2time > now)) {
-      return p1.name.compareTo(p2.name);
+      return p1.name.toLowerCase().compareTo(p2.name.toLowerCase());
     }
     if (p1time <= now) {
       return -1;
@@ -267,7 +273,7 @@ class _MainPageState extends State<MainPage> {
   Future<List<Plant>> loadPlants() async {
     db = await getDatabase();
     final List<Map<String, dynamic>> maps = await db.rawQuery(
-        "SELECT plants.id as id, name, frequency, action, max(timestamp) as ts from plants left outer join actions on plants.id = plant_id group by plants.id, name, frequency, action");
+        "SELECT plants.id as id, name, frequency, action, max(timestamp) as ts, snooze from plants left outer join actions on plants.id = plant_id group by plants.id, name, frequency, action");
     final List<Map<String, dynamic>> photos =
         await db.rawQuery("SELECT * from photos");
     var groupedPhotos = groupBy(photos, (photo) => photo['plant_id']);
@@ -279,11 +285,13 @@ class _MainPageState extends State<MainPage> {
             maps[i]['frequency'] ?? 0,
             maps[i]['ts'] ?? 0,
             groupedPhotos.containsKey(maps[i]['id'])
-                ? groupedPhotos[maps[i]['id']].reduce((value, element) =>
-                    value['timestamp'] > element['timestamp']
-                        ? value
-                        : element)['path']
-                : null));
+                ? () {
+                    var photo = groupedPhotos[maps[i]['id']];
+                    photo.sort((v1, v2) => v2['timestamp'] - v1['timestamp']);
+                    return photo.map((v) => v['path'].toString()).toList();
+                  }()
+                : [],
+            maps[i]['snooze'] ?? 0));
     sortPlantList(ret);
     return ret;
   }
@@ -306,7 +314,11 @@ class _MainPageState extends State<MainPage> {
       return false;
     }
     var now = getCurrentTimestamp();
-    return (now - p.ts - p.frequency * 86400) > 0;
+    var waterTime = now - p.ts - p.frequency * 86400;
+    if (p.snooze > 0 && p.snooze > now && waterTime > 0) {
+      return false;
+    }
+    return waterTime > 0;
   }
 
   @override
@@ -323,20 +335,26 @@ class _MainPageState extends State<MainPage> {
                         child: Material(
                             color: needsWatering(p) ? Colors.red : null,
                             child: ListTile(
-                                contentPadding: p.imagePath != null
+                                contentPadding: p.imagePaths.isNotEmpty
                                     ? EdgeInsets.only(left: 0.0, right: 16.0)
                                     : null,
-                                leading: p.imagePath != null
-                                    ? Image.file(File(p.imagePath),
+                                leading: p.imagePaths.isNotEmpty
+                                    ? Image.file(File(p.imagePaths.first),
                                         fit: BoxFit.fitHeight)
                                     : FlutterLogo(),
                                 title: Text(p.name),
                                 trailing: Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      FlatButton(
-                                          child: Icon(Icons.bubble_chart),
-                                          onPressed: () {
+                                      InkWell(
+                                          //overlayColor:Colors.green,
+                                          child: Padding(
+                                              padding: EdgeInsets.only(
+                                                  right: 12.0,
+                                                  top: 12.0,
+                                                  bottom: 12.0),
+                                              child: Icon(Icons.bubble_chart)),
+                                          onTap: () {
                                             var ts = getCurrentTimestamp();
                                             db
                                                 .insert(
@@ -356,27 +374,25 @@ class _MainPageState extends State<MainPage> {
                                               });
                                             });
                                           }),
-                                      PopupMenuButton<String>(
-                                        onSelected: (String value) {
-                                          setState(() {});
-                                        },
-                                        child: Icon(Icons.more_vert),
-                                        itemBuilder: (BuildContext context) =>
-                                            <PopupMenuEntry<String>>[
-                                          const PopupMenuItem<String>(
-                                            value: 'water',
-                                            child: Text('Water'),
-                                          ),
-                                          const PopupMenuItem<String>(
-                                            value: 'fertilize',
-                                            child: Text('Fertilize'),
-                                          ),
-                                          const PopupMenuItem<String>(
-                                            value: 'snooze',
-                                            child: Text('Snooze 1 day'),
-                                          ),
-                                        ],
-                                      )
+                                      InkWell(
+                                          child: Padding(
+                                              padding: EdgeInsets.only(
+                                                  top: 12.0, bottom: 12.0),
+                                              child: Icon(Icons.snooze)),
+                                          onTap: () {
+                                            if (p.frequency == 0) {
+                                              return;
+                                            }
+                                            var ts = getCurrentTimestamp() + 86400;
+                                            db.update('plants', {'snooze': ts},
+                                                where: "id = ?", whereArgs: [p.id])
+                                                .then((e) {
+                                              setState(() {
+                                                p.snooze = ts;
+                                                sortPlantList(plants);
+                                              });
+                                            });
+                                          }),
                                     ]),
                                 onTap: () {
                                   Navigator.pushNamed(context, '/detail',
