@@ -8,6 +8,9 @@ import 'package:sqflite/sqflite.dart';
 import 'package:intl/intl.dart';
 import 'package:image_picker/image_picker.dart';
 
+import "plant.dart";
+import "search.dart";
+
 void main() {
   runApp(Plantz());
 }
@@ -213,16 +216,7 @@ class MainPage extends StatefulWidget {
   _MainPageState createState() => _MainPageState();
 }
 
-class Plant {
-  String name;
-  final int id;
-  int frequency;
-  int ts;
-  List<String> imagePaths;
-  int snooze;
 
-  Plant(this.name, this.id, this.frequency, this.ts, this.imagePaths, this.snooze);
-}
 
 class _MainPageState extends State<MainPage> {
   TextEditingController frequencyController;
@@ -325,6 +319,14 @@ class _MainPageState extends State<MainPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        actions: <Widget>[
+          IconButton(
+            onPressed: () {
+              showSearch(context: context, delegate: PlantSearch(plants));
+            },
+            icon: Icon(Icons.search),
+          )
+        ],
         title: Text(widget.title),
       ),
       body: Center(
