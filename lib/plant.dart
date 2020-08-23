@@ -5,6 +5,7 @@ class Plant {
   int ts;
   List<String> imagePaths;
   int snooze;
+  int location;
 
-  Plant(this.name, this.id, this.frequency, this.ts, this.imagePaths, this.snooze);
+  Plant(this.name, this.id, this.frequency, this.ts, this.imagePaths, this.snooze, this.location);
 }

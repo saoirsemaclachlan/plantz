@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import 'package:image_picker/image_picker.dart';
 
 import "plant.dart";
+import "routes.dart";
 import "search.dart";
 
 void main() {
@@ -17,7 +18,7 @@ void main() {
 
 void createTables(Database db) {
   db.execute(
-    "CREATE TABLE IF NOT EXISTS plants(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, frequency INTEGER, snooze INTEGER)",
+    "CREATE TABLE IF NOT EXISTS plants(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, frequency INTEGER, snooze INTEGER, region INTEGER, FOREIGN KEY(region) REFERENCES regions(id))",
   );
   db.execute(
     "CREATE TABLE IF NOT EXISTS actions(id INTEGER PRIMARY KEY AUTOINCREMENT, plant_id INTEGER, action TEXT, timestamp INTEGER, FOREIGN KEY(plant_id) REFERENCES plants(id))",
@@ -25,7 +26,10 @@ void createTables(Database db) {
   db.execute(
     "CREATE TABLE IF NOT EXISTS photos(id INTEGER PRIMARY KEY AUTOINCREMENT, plant_id INTEGER, path TEXT, timestamp INTEGER, FOREIGN KEY(plant_id) REFERENCES plants(id))",
   );
-  db.execute("ALTER TABLE plants ADD COLUMN snooze INTEGER");
+  db.execute(
+    "CREATE TABLE IF NOT EXISTS regions(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)",
+  );
+  db.execute("ALTER TABLE plants ADD COLUMN region INTEGER");
 }
 
 Future<Database> getDatabase() async {
@@ -37,7 +41,7 @@ Future<Database> getDatabase() async {
     onDowngrade: (db, oldversion, newVersion) {
       createTables(db);
     },
-    version: 6,
+    version: 7,
   );
 }
 
@@ -60,11 +64,12 @@ class Plantz extends StatelessWidget {
       },
       onGenerateRoute: (settings) {
         if (settings.name == '/detail') {
-          final plant = settings.arguments;
+          final PlantDetailPageRouteArguments args = settings.arguments;
           return MaterialPageRoute(
             builder: (context) {
               return PlantDetailPage(
-                plant: plant,
+                plant: args.p,
+                locations: args.locations,
               );
             },
           );
@@ -80,9 +85,10 @@ class Plantz extends StatelessWidget {
 }
 
 class PlantDetailPage extends StatefulWidget {
-  PlantDetailPage({Key key, this.plant}) : super(key: key);
+  PlantDetailPage({Key key, this.plant, this.locations}) : super(key: key);
 
   Plant plant;
+  Map<String, int> locations;
   @override
   _PlantDetailPageState createState() => _PlantDetailPageState();
 }
@@ -91,6 +97,7 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
   TextEditingController controller;
   Database db;
   Plant plant;
+  Map<String, int> locations;
   List<int> waterings = [];
   TextEditingController frequencyController;
   final picker = ImagePicker();
@@ -124,9 +131,12 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
   void initState() {
     super.initState();
     plant = widget.plant;
+    locations = Map.from(widget.locations);
+    locations["None"] = -1;
     controller = TextEditingController(text: plant.name);
     frequencyController =
         TextEditingController(text: plant.frequency.toString());
+
     loadPlant().then((result) {
       setState(() {
         waterings = result;
@@ -162,6 +172,14 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
     plant.name = name;
   }
 
+  Future<void> updateLocation(int id) async {
+    await db.update('plants', {'region': id},
+        where: "id = ?", whereArgs: [plant.id]);
+    setState(() {
+      plant.location = id;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     List<Widget> widgets = [
@@ -179,6 +197,27 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
         keyboardType: TextInputType.number,
         onChanged: (s) {
           updateFrequency(int.tryParse(frequencyController.text) ?? 0);
+        },
+      ),
+      new DropdownButton<int>(
+        items: locations
+            .map((String value, int idx) {
+              if (idx < -1) {
+                return MapEntry(idx, null);
+              }
+              return MapEntry(
+                  idx,
+                  DropdownMenuItem<int>(
+                    value: idx,
+                    child: new Text(value),
+                  ));
+            })
+            .values
+            .where((t) => t != null)
+            .toList(),
+        value: plant.location,
+        onChanged: (l) {
+          updateLocation(l);
         },
       ),
       FlatButton(
@@ -225,21 +264,44 @@ class MainPage extends StatefulWidget {
 class _MainPageState extends State<MainPage> {
   TextEditingController frequencyController;
   TextEditingController addController;
+  TextEditingController regionController;
   List<Plant> plants = [];
   Database db;
+  int selectedLocation = -1;
+  Map<String, int> locations = {};
 
-  Future<void> addPlant(String plant, int frequency) async {
+  Future<void> addPlant(String plant, int frequency, int region) async {
     if (plant.isEmpty) {
       return;
     }
     var id = await db.insert(
       'plants',
-      {'name': plant, 'frequency': frequency},
+      {
+        'name': plant,
+        'frequency': frequency,
+        'region': locations.length > 2 ? region : -1
+      },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
     setState(() {
-      plants.add(Plant(plant, id, frequency, 0, [], 0));
+      plants.add(Plant(plant, id, frequency, 0, [], 0, region));
       sortPlantList(plants);
+    });
+  }
+
+  Future<void> addRegion(String name) async {
+    if (name.isEmpty) {
+      return;
+    }
+    var id = await db.insert(
+      'regions',
+      {'name': name},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    setState(() {
+      locations[name] = id;
+      locations.remove('Add new region');
+      locations['Add new region'] = -2;
     });
   }
 
@@ -271,25 +333,35 @@ class _MainPageState extends State<MainPage> {
   Future<List<Plant>> loadPlants() async {
     db = await getDatabase();
     final List<Map<String, dynamic>> maps = await db.rawQuery(
-        "SELECT plants.id as id, name, frequency, action, max(timestamp) as ts, snooze from plants left outer join actions on plants.id = plant_id group by plants.id, name, frequency, action");
+        "SELECT plants.id as id, name, frequency, action, max(timestamp) as ts, snooze, region from plants left outer join actions on plants.id = plant_id group by plants.id, name, frequency, action");
     final List<Map<String, dynamic>> photos =
         await db.rawQuery("SELECT * from photos");
     var groupedPhotos = groupBy(photos, (photo) => photo['plant_id']);
+    final List<Map<String, dynamic>> regions =
+        await db.rawQuery("SELECT * from regions");
+    locations = {'All': -1};
+    for (var i = 0; i < regions.length; ++i) {
+      locations[regions[i]['name']] = regions[i]['id'];
+    }
+    locations['Add new region'] = -2;
     var ret = List.generate(
-        maps.length,
-        (i) => Plant(
-            maps[i]['name'],
-            maps[i]['id'],
-            maps[i]['frequency'] ?? 0,
-            maps[i]['ts'] ?? 0,
-            groupedPhotos.containsKey(maps[i]['id'])
-                ? () {
-                    var photo = groupedPhotos[maps[i]['id']];
-                    photo.sort((v1, v2) => v2['timestamp'] - v1['timestamp']);
-                    return photo.map((v) => v['path'].toString()).toList();
-                  }()
-                : [],
-            maps[i]['snooze'] ?? 0));
+      maps.length,
+      (i) => Plant(
+        maps[i]['name'],
+        maps[i]['id'],
+        maps[i]['frequency'] ?? 0,
+        maps[i]['ts'] ?? 0,
+        groupedPhotos.containsKey(maps[i]['id'])
+            ? () {
+                var photo = groupedPhotos[maps[i]['id']];
+                photo.sort((v1, v2) => v2['timestamp'] - v1['timestamp']);
+                return photo.map((v) => v['path'].toString()).toList();
+              }()
+            : [],
+        maps[i]['snooze'] ?? 0,
+        maps[i]['region'] ?? -1,
+      ),
+    );
     sortPlantList(ret);
     return ret;
   }
@@ -300,6 +372,7 @@ class _MainPageState extends State<MainPage> {
 
     frequencyController = TextEditingController(text: "7");
     addController = TextEditingController();
+    regionController = TextEditingController();
     loadPlants().then((result) {
       setState(() {
         plants = result;
@@ -324,9 +397,58 @@ class _MainPageState extends State<MainPage> {
     return Scaffold(
       appBar: AppBar(
         actions: <Widget>[
+          new DropdownButton<int>(
+            items: locations
+                .map((String value, int idx) {
+                  return MapEntry(
+                      idx,
+                      DropdownMenuItem<int>(
+                        value: idx,
+                        child: new Text(value),
+                      ));
+                })
+                .values
+                .toList(),
+            value: selectedLocation,
+            onChanged: (l) {
+              if (l == -2) {
+                showDialog(
+                    child: new Dialog(
+                      child: new Column(
+                        children: <Widget>[
+                          new TextField(
+                            decoration: new InputDecoration(labelText: "Name"),
+                            controller: regionController,
+                          ),
+                          new FlatButton(
+                            child: new Text("Add"),
+                            onPressed: () {
+                              addRegion(regionController.text);
+                              Navigator.pop(context);
+                            },
+                          ),
+                          new FlatButton(
+                            child: new Text("Cancel"),
+                            onPressed: () {
+                              Navigator.pop(context);
+                            },
+                          )
+                        ],
+                      ),
+                    ),
+                    context: context);
+                return;
+              }
+              setState(() {
+                selectedLocation = l;
+              });
+            },
+          ),
           IconButton(
             onPressed: () {
-              showSearch(context: context, delegate: PlantSearch(plants))
+              showSearch(
+                      context: context,
+                      delegate: PlantSearch(plants, locations))
                   .then((e) {
                 loadPlants().then((result) {
                   setState(() {
@@ -344,6 +466,12 @@ class _MainPageState extends State<MainPage> {
         child: RefreshIndicator(
           child: ListView(
               children: plants
+                  .where((p) {
+                    if (selectedLocation == -1) {
+                      return true;
+                    }
+                    return p.location == selectedLocation;
+                  })
                   .map((p) => Card(
                         child: Material(
                             color: needsWatering(p) ? Colors.red : null,
@@ -413,7 +541,9 @@ class _MainPageState extends State<MainPage> {
                                     ]),
                                 onTap: () {
                                   Navigator.pushNamed(context, '/detail',
-                                          arguments: p)
+                                          arguments:
+                                              PlantDetailPageRouteArguments(
+                                                  p, locations))
                                       .then((e) {
                                     loadPlants().then((result) {
                                       setState(() {
@@ -436,35 +566,74 @@ class _MainPageState extends State<MainPage> {
       floatingActionButton: FloatingActionButton(
         onPressed: () {
           showDialog(
-              child: new Dialog(
-                child: new Column(
-                  children: <Widget>[
-                    new TextField(
-                      decoration: new InputDecoration(labelText: "Name"),
-                      controller: addController,
+              builder: (context) {
+                var editLocation = selectedLocation > 0
+                    ? selectedLocation
+                    : locations.values.reduce((v, e) => max(v, e));
+                return StatefulBuilder(builder: (context, setState) {
+                  return new Dialog(
+                    child: new Column(
+                      children: <Widget>[
+                        new TextField(
+                          decoration: new InputDecoration(labelText: "Name"),
+                          controller: addController,
+                        ),
+                        new TextField(
+                          decoration:
+                              new InputDecoration(labelText: "Frequency"),
+                          keyboardType: TextInputType.number,
+                          controller: frequencyController,
+                        ),
+                        locations.length > 2
+                            ? new DropdownButton<int>(
+                                items: locations
+                                    .map((String value, int idx) {
+                                      if (idx < 0) {
+                                        return MapEntry(idx, null);
+                                      }
+                                      return MapEntry(
+                                          idx,
+                                          DropdownMenuItem<int>(
+                                            value: idx,
+                                            child: new Text(value),
+                                          ));
+                                    })
+                                    .values
+                                    .where((t) => t != null)
+                                    .toList(),
+                                value: editLocation,
+                                onChanged: (l) {
+                                  setState(() {
+                                    editLocation = l;
+                                  });
+                                  print(l);
+                                  print(editLocation);
+                                },
+                              )
+                            : null,
+                        new FlatButton(
+                          child: new Text("Add"),
+                          onPressed: () {
+                            addPlant(
+                                addController.text,
+                                int.tryParse(frequencyController.text) ?? 7,
+                                editLocation);
+                            addController.text = '';
+                            frequencyController.text = '7';
+                            Navigator.pop(context);
+                          },
+                        ),
+                        new FlatButton(
+                          child: new Text("Cancel"),
+                          onPressed: () {
+                            Navigator.pop(context);
+                          },
+                        )
+                      ],
                     ),
-                    new TextField(
-                      decoration: new InputDecoration(labelText: "Frequency"),
-                      keyboardType: TextInputType.number,
-                      controller: frequencyController,
-                    ),
-                    new FlatButton(
-                      child: new Text("Add"),
-                      onPressed: () {
-                        addPlant(addController.text,
-                            int.tryParse(frequencyController.text) ?? 7);
-                        Navigator.pop(context);
-                      },
-                    ),
-                    new FlatButton(
-                      child: new Text("Cancel"),
-                      onPressed: () {
-                        Navigator.pop(context);
-                      },
-                    )
-                  ],
-                ),
-              ),
+                  );
+                });
+              },
               context: context);
         },
         tooltip: 'Add plant',

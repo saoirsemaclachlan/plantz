@@ -2,11 +2,13 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import "plant.dart";
+import "routes.dart";
 
 class PlantSearch extends SearchDelegate {
   final List<Plant> plants;
+  final Map<String, int> locations;
 
-  PlantSearch(this.plants);
+  PlantSearch(this.plants, this.locations);
 
   @override
   List<Widget> buildActions(BuildContext context) {
@@ -81,7 +83,9 @@ class PlantSearch extends SearchDelegate {
             results[index].name,
           ),
           onTap: () {
-            Navigator.pushNamed(context, '/detail', arguments: results[index]);
+            Navigator.pushNamed(context, '/detail',
+                arguments:
+                    PlantDetailPageRouteArguments(results[index], locations));
           },
         );
       },
