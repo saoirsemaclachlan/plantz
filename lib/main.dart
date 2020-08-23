@@ -69,6 +69,11 @@ class Plantz extends StatelessWidget {
             },
           );
         }
+        return MaterialPageRoute(
+          builder: (context) {
+            return MainPage();
+          },
+        );
       },
     );
   }
@@ -91,7 +96,8 @@ class _PlantDetailPageState extends State<PlantDetailPage> {
   final picker = ImagePicker();
 
   Future getImage() async {
-    final pickedFile = await picker.getImage(source: ImageSource.camera);
+    final pickedFile = await picker.getImage(
+        source: ImageSource.camera, preferredCameraDevice: CameraDevice.rear);
     int ts = getCurrentTimestamp();
     await db.insert(
       'photos',
@@ -216,8 +222,6 @@ class MainPage extends StatefulWidget {
   _MainPageState createState() => _MainPageState();
 }
 
-
-
 class _MainPageState extends State<MainPage> {
   TextEditingController frequencyController;
   TextEditingController addController;
@@ -322,12 +326,19 @@ class _MainPageState extends State<MainPage> {
         actions: <Widget>[
           IconButton(
             onPressed: () {
-              showSearch(context: context, delegate: PlantSearch(plants));
+              showSearch(context: context, delegate: PlantSearch(plants))
+                  .then((e) {
+                loadPlants().then((result) {
+                  setState(() {
+                    plants = result;
+                  });
+                });
+              });
             },
             icon: Icon(Icons.search),
           )
         ],
-        title: Text(widget.title),
+        title: Text("${widget.title} (${plants.length})"),
       ),
       body: Center(
         child: RefreshIndicator(
@@ -385,9 +396,13 @@ class _MainPageState extends State<MainPage> {
                                             if (p.frequency == 0) {
                                               return;
                                             }
-                                            var ts = getCurrentTimestamp() + 86400;
-                                            db.update('plants', {'snooze': ts},
-                                                where: "id = ?", whereArgs: [p.id])
+                                            var ts =
+                                                getCurrentTimestamp() + 86400;
+                                            db
+                                                .update(
+                                                    'plants', {'snooze': ts},
+                                                    where: "id = ?",
+                                                    whereArgs: [p.id])
                                                 .then((e) {
                                               setState(() {
                                                 p.snooze = ts;
